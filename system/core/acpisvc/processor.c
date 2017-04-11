@@ -10,6 +10,7 @@
 #include <stdio.h>
 
 #include <acpica/acpi.h>
+#include <acpica/osfuchsia.h>
 #include <acpisvc/protocol.h>
 #include <magenta/syscalls.h>
 #include <mxio/dispatcher.h>
