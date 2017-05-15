@@ -9,6 +9,7 @@
 #include <pow2.h>
 #include <trace.h>
 
+#include <dev/iommu/dummy.h>
 #include <kernel/auto_lock.h>
 #include <kernel/cmdline.h>
 #include <kernel/mutex.h>
@@ -69,6 +70,9 @@ void magenta_init(uint level) TA_NO_THREAD_SAFETY_ANALYSIS {
     handle_arena.Init("handles", sizeof(Handle), kMaxHandleCount);
     root_job = JobDispatcher::CreateRootJob();
     policy_manager = PolicyManager::Create();
+
+    // TODO(teisenbe): Remove this once the resource side of IOMMUs becomes real.
+    ASSERT(DummyIommu::Create(0) != nullptr);
 }
 
 // Masks for building a Handle's base_value, which ProcessDispatcher
