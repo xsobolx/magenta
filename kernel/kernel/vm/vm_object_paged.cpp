@@ -39,6 +39,11 @@ void ZeroPage(vm_page_t* p) {
     ZeroPage(pa);
 }
 
+void InitializeVmPage(vm_page_t* p) {
+    p->state = VM_PAGE_STATE_OBJECT;
+    p->object.pin_count = 0;
+}
+
 } // namespace
 
 VmObjectPaged::VmObjectPaged(uint32_t pmm_alloc_flags, mxtl::RefPtr<VmObject> parent)
@@ -50,6 +55,11 @@ VmObjectPaged::~VmObjectPaged() {
     canary_.Assert();
 
     LTRACEF("%p\n", this);
+
+    page_list_.ForEveryPage(
+            [](const auto p, uint64_t off) {
+                ASSERT(p->object.pin_count == 0);
+            });
 
     // free all of the pages attached to us
     page_list_.FreeAllPages();
@@ -282,7 +292,7 @@ status_t VmObjectPaged::GetPageLocked(uint64_t offset, uint pf_flags, vm_page_t*
             if (!p_clone)
                 return ERR_NO_MEMORY;
 
-            p_clone->state = VM_PAGE_STATE_OBJECT;
+            InitializeVmPage(p_clone);
 
             // do a direct copy of the two pages
             const void* src = paddr_to_kvaddr(pa);
@@ -328,7 +338,7 @@ status_t VmObjectPaged::GetPageLocked(uint64_t offset, uint pf_flags, vm_page_t*
     if (!p)
         return ERR_NO_MEMORY;
 
-    p->state = VM_PAGE_STATE_OBJECT;
+    InitializeVmPage(p);
 
     // TODO: remove once pmm returns zeroed pages
     ZeroPage(pa);
@@ -403,7 +413,7 @@ status_t VmObjectPaged::CommitRange(uint64_t offset, uint64_t len, uint64_t* com
         p = list_remove_head_type(&page_list, vm_page_t, free.node);
         ASSERT(p);
 
-        p->state = VM_PAGE_STATE_OBJECT;
+        InitializeVmPage(p);
 
         // TODO: remove once pmm returns zeroed pages
         ZeroPage(p);
@@ -476,7 +486,7 @@ status_t VmObjectPaged::CommitRangeContiguous(uint64_t offset, uint64_t len, uin
         vm_page_t* p = list_remove_head_type(&page_list, vm_page_t, free.node);
         ASSERT(p);
 
-        p->state = VM_PAGE_STATE_OBJECT;
+        InitializeVmPage(p);
 
         // TODO: remove once pmm returns zeroed pages
         ZeroPage(p);
@@ -522,6 +532,10 @@ status_t VmObjectPaged::DecommitRange(uint64_t offset, uint64_t len, uint64_t* d
     LTRACEF("start offset %#" PRIx64 ", end %#" PRIx64 ", page_aliged_len %#" PRIx64 "\n", start, end,
             page_aligned_len);
 
+    if (AnyPagesPinnedLocked(start, page_aligned_len)) {
+        return ERR_BAD_STATE;
+    }
+
     // unmap all of the pages in this range on all the mapping regions
     RangeChangeUpdateLocked(start, page_aligned_len);
 
@@ -535,6 +549,98 @@ status_t VmObjectPaged::DecommitRange(uint64_t offset, uint64_t len, uint64_t* d
     }
 
     return NO_ERROR;
+}
+
+status_t VmObjectPaged::Pin(uint64_t offset, uint64_t len) {
+    canary_.Assert();
+
+    AutoLock a(&lock_);
+
+    // verify that the range is within the object
+    if (unlikely(!InRange(offset, len, size_)))
+        return ERR_OUT_OF_RANGE;
+
+    if (unlikely(len == 0))
+        return NO_ERROR;
+
+    const uint64_t start_page_offset = ROUNDDOWN(offset, PAGE_SIZE);
+    const uint64_t end_page_offset = ROUNDUP(offset + len, PAGE_SIZE);
+
+    status_t status = NO_ERROR;
+    uint64_t off;
+    for (off = start_page_offset; off != end_page_offset && status == NO_ERROR; off += PAGE_SIZE) {
+        vm_page_t* p = page_list_.GetPage(off);
+        if (!p) {
+            status = ERR_NOT_FOUND;
+            break;
+        }
+
+        DEBUG_ASSERT(p->state == VM_PAGE_STATE_OBJECT);
+        if (p->object.pin_count == VM_PAGE_OBJECT_MAX_PIN_COUNT) {
+            status = ERR_UNAVAILABLE;
+            break;
+        }
+        p->object.pin_count++;
+    }
+
+    if (status != NO_ERROR) {
+        UnpinLocked(start_page_offset, off - start_page_offset);
+        return status;
+    }
+
+    return NO_ERROR;
+}
+
+void VmObjectPaged::Unpin(uint64_t offset, uint64_t len) {
+    AutoLock a(&lock_);
+    UnpinLocked(offset, len);
+}
+
+void VmObjectPaged::UnpinLocked(uint64_t offset, uint64_t len) {
+    canary_.Assert();
+    DEBUG_ASSERT(lock_.IsHeld());
+
+    // verify that the range is within the object
+    ASSERT(InRange(offset, len, size_));
+
+    if (unlikely(len == 0))
+        return;
+
+    const uint64_t start_page_offset = ROUNDDOWN(offset, PAGE_SIZE);
+    const uint64_t end_page_offset = ROUNDUP(offset + len, PAGE_SIZE);
+
+    uint64_t off;
+    for (off = start_page_offset; off != end_page_offset; off += PAGE_SIZE) {
+        vm_page_t* p = page_list_.GetPage(off);
+        ASSERT_MSG(p != nullptr, "Tried to unpin an uncommitted page");
+
+        DEBUG_ASSERT(p->state == VM_PAGE_STATE_OBJECT);
+        ASSERT(p->object.pin_count > 0);
+        p->object.pin_count--;
+    }
+
+    return;
+}
+
+bool VmObjectPaged::AnyPagesPinnedLocked(uint64_t offset, size_t len) {
+    canary_.Assert();
+    DEBUG_ASSERT(lock_.IsHeld());
+    DEBUG_ASSERT(IS_PAGE_ALIGNED(offset));
+    DEBUG_ASSERT(IS_PAGE_ALIGNED(len));
+
+    const uint64_t start_page_offset = offset;
+    const uint64_t end_page_offset = offset + len;
+
+    bool found_pinned = false;
+    page_list_.ForEveryPageInRange(
+            [&found_pinned, start_page_offset, end_page_offset](const auto p, uint64_t off) {
+                DEBUG_ASSERT(off >= start_page_offset && off < end_page_offset);
+                if (p->object.pin_count > 0) {
+                    found_pinned = true;
+                }
+            }, start_page_offset, end_page_offset);
+
+    return found_pinned;
 }
 
 status_t VmObjectPaged::ResizeLocked(uint64_t s) {
@@ -557,6 +663,9 @@ status_t VmObjectPaged::ResizeLocked(uint64_t s) {
 
         // we're only worried about whole pages to be removed
         if (page_aligned_len > 0) {
+            if (AnyPagesPinnedLocked(start, page_aligned_len)) {
+                return ERR_BAD_STATE;
+            }
             // unmap all of the pages in this range on all the mapping regions
             RangeChangeUpdateLocked(start, page_aligned_len);
 
