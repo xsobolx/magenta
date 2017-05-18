@@ -90,6 +90,7 @@ static mx_protocol_device_t kaveri_disp_device_proto = {
 
 static mx_status_t kaveri_disp_bind(mx_driver_t* drv, mx_device_t* dev, void** cookie) {
     pci_protocol_t* pci;
+    mx_pci_resource_t pci_res;
     mx_status_t status;
 
     if (device_op_get_protocol(dev, MX_PROTOCOL_PCI, (void**)&pci))
@@ -104,23 +105,36 @@ static mx_status_t kaveri_disp_bind(mx_driver_t* drv, mx_device_t* dev, void** c
     if (!device)
         return ERR_NO_MEMORY;
 
-    // map register window
-    // seems to be bar 5
-    status = pci->map_mmio(dev, 5, MX_CACHE_POLICY_UNCACHED_DEVICE,
-                           &device->regs, &device->regs_size, &device->regs_handle);
-    if (status != NO_ERROR) {
+    // get the register window bar
+    status = pci->get_bar(dev, 5, &pci_res);
+    if (status != NO_ERROR || pci_res.type != PCI_RESOURCE_TYPE_MMIO) {
+        printf("kaveri-disp: error %d getting bar 5\n", status);
         goto fail;
     }
 
-    // map framebuffer window
-    // seems to be bar 0
-    status = pci->map_mmio(dev, 0, MX_CACHE_POLICY_WRITE_COMBINING,
-                           &device->framebuffer,
-                           &device->framebuffer_size,
-                           &device->framebuffer_handle);
+    status = pci->map_resource(dev, &pci_res, MX_CACHE_POLICY_UNCACHED_DEVICE, &device->regs);
     if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d mapping bar 5\n", status);
         goto fail;
     }
+    device->regs_size = pci_res.size;
+    device->regs_handle = pci_res.mmio_handle;
+
+    // get the framebuffer window bar
+    status = pci->get_bar(dev, 0, &pci_res);
+    if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d getting bar 0\n", status);
+        goto fail;
+    }
+
+    status = pci->map_resource(dev, &pci_res, MX_CACHE_POLICY_WRITE_COMBINING,
+            &device->framebuffer);
+    if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d mapping bar 0\n", status);
+        goto fail;
+    }
+    device->framebuffer_size = pci_res.size;
+    device->framebuffer_handle = pci_res.mmio_handle;
 
     mx_display_info_t* di = &device->info;
     uint32_t format, width, height, stride;
