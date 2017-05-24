@@ -66,6 +66,12 @@ This option tells the kernel to limit system memory to the MB value specified
 by 'num'. Using this effectively allows a user to simulate the system having
 less physical memory than physically present.
 
+## kernel.unbuffered-stdout=\<bool>
+
+This option (disabled by default) requests that the kernel print output
+immediately to the serial console rather than buffering via the debuglog. It
+is useful for cases where the system is experiencing a panic in early boot.
+
 ## gfxconsole.early=\<bool>
 
 This option (disabled by default) requests that the kernel start a graphics

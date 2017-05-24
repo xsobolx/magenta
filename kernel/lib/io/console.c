@@ -16,17 +16,11 @@
 #include <arch/ops.h>
 #include <platform.h>
 #include <platform/debug.h>
+#include <kernel/cmdline.h>
 #include <kernel/thread.h>
 
 #if WITH_LIB_DEBUGLOG
 #include <lib/debuglog.h>
-#endif
-
-/* enable this to cause the kernel-originated messages to splat messages out of the platform
- * putc mechanism immediately instead of going through the debug log
- */
-#ifndef ENABLE_KERNEL_LL_DEBUG
-#define ENABLE_KERNEL_LL_DEBUG 0
 #endif
 
 /* routines for dealing with main console io */
@@ -37,6 +31,11 @@
 #define PRINT_LOCK_FLAGS SPIN_LOCK_FLAG_INTERRUPTS
 #endif
 
+static bool unbuffered_stdout;
+
+void __kernel_stdout_init(void) {
+    unbuffered_stdout = cmdline_get_bool("kernel.unbuffered-stdout", false);
+}
 
 static spin_lock_t dputc_spin_lock = 0;
 
@@ -72,8 +71,11 @@ void __kernel_console_write(const char *str, size_t len)
 
 static void __kernel_stdout_write(const char *str, size_t len)
 {
-#if WITH_LIB_DEBUGLOG && !ENABLE_KERNEL_LL_DEBUG
-    if (dlog_write(DLOG_FLAG_KERNEL, str, len)) {
+#if WITH_LIB_DEBUGLOG
+    if (!unbuffered_stdout && dlog_write(DLOG_FLAG_KERNEL, str, len)) {
+        __kernel_console_write(str, len);
+        __kernel_serial_write(str, len);
+    } else {
         __kernel_console_write(str, len);
         __kernel_serial_write(str, len);
     }
@@ -82,7 +84,6 @@ static void __kernel_stdout_write(const char *str, size_t len)
     __kernel_serial_write(str, len);
 #endif
 }
-
 
 #if WITH_DEBUG_LINEBUFFER
 static void __kernel_stdout_write_buffered(const char *str, size_t len) {
