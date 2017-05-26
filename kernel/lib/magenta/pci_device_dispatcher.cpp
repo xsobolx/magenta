@@ -154,7 +154,7 @@ status_t PciDeviceDispatcher::GetConfig(pci_config_info_t* out) {
     out->is_mmio = (cfg->addr_space() == PciAddrSpace::MMIO);
 
     if (out->is_mmio) {
-        out->vmo = dev->config_vmo();
+        out->vmo_disp = dev->config_disp();
     }
 
     return NO_ERROR;

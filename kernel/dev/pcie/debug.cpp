@@ -357,9 +357,9 @@ static void dump_pcie_bars(const PcieDevice& dev,
                 info->is_mmio ? (info->is_64bit ? " 64-bit" : " 32-bit") : "",
                 info->is_mmio ? "MMIO" : "PIO",
                 info->allocation == nullptr ? "" : " (allocated)");
-        if (info->vmo) {
+        if (info->vmo_disp) {
             LSPCI_PRINTF("                               :: ");
-            info->vmo->Dump(0, false);
+            info->vmo_disp->vmo()->Dump(0, false);
         }
     }
 }

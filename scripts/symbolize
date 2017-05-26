@@ -291,6 +291,8 @@ def main():
                                         line = "%s%#.16x%s" % (prefix, bias + addr, rest)
                                     processed_lines.append(line + "\n")
                     continue
+                else:
+                    processed_lines.append("warning: Could not find path for dso '%s'" % dso
 
             # fallthru print if we don't recognize the format of the backtrace entry
             processed_lines.append("#%s: (unknown)\n" % (frame_num,))

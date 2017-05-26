@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <magenta/compiler.h>
 #include <magenta/errors.h>
+#include <magenta/vm_object_dispatcher.h>
 #include <dev/pcie_bus_driver.h>
 #include <dev/pcie_caps.h>
 #include <dev/pci_common.h>
@@ -36,7 +37,7 @@ struct pci_config_info_t {
     uint64_t size = 0;
     uint64_t base_addr = 0;
     bool     is_mmio;
-    mxtl::RefPtr<VmObject> vmo;
+    mxtl::RefPtr<VmObjectDispatcher> vmo_disp;
 };
 
 /*
@@ -49,7 +50,7 @@ struct pcie_bar_info_t {
     bool     is_64bit;
     bool     is_prefetchable;
     uint     first_bar_reg;
-    mxtl::RefPtr<VmObject> vmo;
+    mxtl::RefPtr<VmObjectDispatcher> vmo_disp;
     RegionAllocator::Region::UPtr allocation;
 };
 
@@ -292,7 +293,8 @@ public:
 
     const PciConfig*     config()      const { return cfg_; }
     paddr_t              config_phys() const { return cfg_phys_; }
-    mxtl::RefPtr<VmObject> config_vmo() const { return cfg_vmo_; }
+    mxtl::RefPtr<VmObject> config_vmo() const { return cfg_disp_->vmo(); }
+    mxtl::RefPtr<VmObjectDispatcher> config_disp() const { return cfg_disp_; }
     PcieBusDriver&       driver()            { return bus_drv_; }
 
     bool     plugged_in()     const { return plugged_in_; }
@@ -362,7 +364,7 @@ protected:
     PcieBusDriver& bus_drv_;        // Reference to our bus driver state.
     const PciConfig*         cfg_ = nullptr;  // Pointer to the memory mapped ECAM (kernel vaddr)
     paddr_t        cfg_phys_ = 0;   // The physical address of the device's ECAM
-    mxtl::RefPtr<VmObject> cfg_vmo_ = nullptr;
+    mxtl::RefPtr<VmObjectDispatcher> cfg_disp_;
     SpinLock       cmd_reg_lock_;   // Protection for access to the command register.
     const bool     is_bridge_;      // True if this device is also a bridge
     const uint     bus_id_;         // The bus ID this bridge/device exists on

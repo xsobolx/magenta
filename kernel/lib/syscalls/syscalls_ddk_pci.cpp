@@ -50,6 +50,8 @@ static inline void shutdown_early_init_console() {}
 #include <dev/pcie_root.h>
 #include <magenta/pci_device_dispatcher.h>
 
+mx_rights_t kDefaultVmoRights = MX_RIGHT_MAP | MX_RIGHT_TRANSFER | MX_RIGHT_READ | MX_RIGHT_WRITE;
+
 // Implementation of a PcieRoot with a look-up table based legacy IRQ swizzler
 // suitable for use with ACPI style swizzle definitions.
 class PcieRootLUTSwizzle : public PcieRoot {
@@ -442,7 +444,7 @@ mx_status_t sys_pci_get_bar(mx_handle_t dev_handle, uint32_t bar_num, user_ptr<m
 
     // Get bar info from the device via the dispatcher and make sure it makes sense
     const pcie_bar_info_t* info = pci_device->GetBar(bar_num);
-    if (info == nullptr || info->size == 0 || info->vmo == nullptr) {
+    if (info == nullptr || info->size == 0 || info->vmo_disp == nullptr) {
         return ERR_INVALID_ARGS;
     }
 
@@ -454,16 +456,7 @@ mx_status_t sys_pci_get_bar(mx_handle_t dev_handle, uint32_t bar_num, user_ptr<m
     if (info->size == 0) {
         bar.type = PCI_RESOURCE_TYPE_UNUSED;
     } else if (info->is_mmio) {
-        DEBUG_ASSERT(info->vmo != nullptr);
-
-        // We have a VMO, time to prep a handle to it for the caller
-        mx_rights_t rights;
-        status = VmObjectDispatcher::Create(info->vmo, &dispatcher, &rights);
-        if (status != NO_ERROR) {
-            return status;
-        }
-
-        mmio_handle = HandleOwner(MakeHandle(mxtl::move(dispatcher), rights));
+        mmio_handle = HandleOwner(MakeHandle(info->vmo_disp, kDefaultVmoRights));
         if (!mmio_handle) {
             return ERR_NO_MEMORY;
         }
@@ -523,21 +516,16 @@ mx_status_t sys_pci_get_config(mx_handle_t dev_handle, user_ptr<mx_pci_resource_
 
     // VMO vs PIO
     if (pci_config.is_mmio) {
-        DEBUG_ASSERT(pci_config.vmo);
+        DEBUG_ASSERT(pci_config.vmo_disp);
 
         // Create a handle to the VMO to give back to the caller, but strip off the write
         // permission. PCI config space is only writable by the bus driver.
         // TODO(cja): Rethink this for dealing with gap registers in capability space
         // later. It might make sense to keep a mapping of gaps in the space to allow
         // writes and provide a syscall to do so.
-        mx_rights_t rights;
-        status = VmObjectDispatcher::Create(pci_config.vmo, &dispatcher, &rights);
-        if (status != NO_ERROR) {
-            return status;
-        }
-
+        mx_rights_t rights = kDefaultVmoRights;
         rights &= ~MX_RIGHT_WRITE;
-        mmio_handle = HandleOwner(MakeHandle(mxtl::move(dispatcher), rights));
+        mmio_handle = HandleOwner(MakeHandle(pci_config.vmo_disp, rights));
         if (!mmio_handle) {
             return ERR_NO_MEMORY;
         }
