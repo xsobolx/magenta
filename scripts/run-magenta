@@ -276,10 +276,14 @@ fi
 
 # start a few extra harmless virtio devices that can be ignored
 if (( $VIRTIO )); then
-    ARGS+=" -device virtio-serial-pci"
-    ARGS+=" -device virtio-rng-pci"
-    ARGS+=" -device virtio-mouse-pci"
-    ARGS+=" -device virtio-keyboard-pci"
+    ARGS+=" -device virtio-serial-pci,id=ser0,disable-legacy=on"
+    ARGS+=" -device virtconsole,bus=ser0.0,chardev=ser0,name=whathwat"
+    ARGS+=" -chardev socket,path=/tmp/ser0,server,nowait,id=ser0"
+    ARGS+=" -device virtconsole,bus=ser0.0,chardev=ser1,name=whathwat2"
+    ARGS+=" -chardev socket,path=/tmp/ser1,server,nowait,id=ser1"
+    #ARGS+=" -device virtio-rng-pci"
+    #ARGS+=" -device virtio-mouse-pci"
+    #ARGS+=" -device virtio-keyboard-pci"
 fi
 
 case $ARCH in

@@ -18,6 +18,7 @@
 #include <magenta/types.h>
 
 #include "block.h"
+#include "console.h"
 #include "device.h"
 #include "gpu.h"
 #include "trace.h"
@@ -58,6 +59,11 @@ extern "C" mx_status_t virtio_bind(mx_driver_t* driver, mx_device_t* device, voi
     case 0x1050:
         LTRACEF("found gpu device\n");
         vd.reset(new virtio::GpuDevice(driver, device));
+        break;
+    case 0x1003:
+    case 0x1043:
+        TRACEF("found console device\n");
+        vd.reset(new virtio::ConsoleDevice(driver, device));
         break;
     default:
         printf("unhandled device id, how did this happen?\n");
