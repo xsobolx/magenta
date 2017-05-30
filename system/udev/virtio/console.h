@@ -10,6 +10,8 @@
 #include <mxtl/unique_ptr.h>
 #include <stdlib.h>
 
+#include "transfer_buffer_list.h"
+
 namespace virtio {
 
 class Ring;
@@ -28,7 +30,7 @@ private:
     static mx_status_t virtio_console_read(void* ctx, void* buf, size_t count, mx_off_t off, size_t* actual);
     static mx_status_t virtio_console_write(void* ctx, const void* buf, size_t count, mx_off_t off, size_t* actual);
 
-    void HandleControlMessage(size_t);
+    void HandleControlMessage(size_t, mx_paddr_t);
 
     mx_status_t virtio_console_start();
     static int virtio_console_start_entry(void* arg);
@@ -42,11 +44,25 @@ private:
     Ring control_rx_vring_ = {this};
     Ring control_tx_vring_ = {this};
 
-    // port rings
-    mxtl::unique_ptr<Ring> port_rx_ring_[32];
-    mxtl::unique_ptr<Ring> port_tx_ring_[32];
-    mx_device_t *port0_device_ = nullptr;
-    mx_protocol_device_t port0_device_ops_ = {};
+    // per port configurations
+    struct Port {
+        Port() {}
+
+        mx_status_t Init(Device *dev);
+
+        mxtl::unique_ptr<Ring> rx_ring;
+        mxtl::unique_ptr<Ring> tx_ring;
+
+        TransferBufferList rx_buffer;
+        TransferBufferList tx_buffer;
+
+        mx_device_t *device = nullptr;
+        mx_protocol_device_t device_ops = {};
+
+        bool active = false;
+    };
+
+    Port port_[32];
 
     // saved block device configuration out of the pci config BAR
     struct virtio_console_config {
@@ -56,22 +72,15 @@ private:
         uint32_t emerg_wr;
     } config_ __PACKED = {};
 
-    // a large transfer buffer
-    uint8_t* transfer_buffer_ = nullptr;
-    mx_paddr_t transfer_buffer_pa_ = 0;
-
-    uint8_t* control_rx_buffer_ = nullptr;
-    mx_paddr_t control_rx_buffer_pa_ = 0;
-
-    uint8_t* control_tx_buffer_ = nullptr;
-    mx_paddr_t control_tx_buffer_pa_ = 0;
-
+    static const size_t control_buffer_size = 128;
+    static const size_t control_ring_size = 32;
     static const size_t port_buffer_size = 512;
-    uint8_t* port0_rx_buffer_ = nullptr;
-    mx_paddr_t port0_rx_buffer_pa_ = 0;
+    static const size_t port_ring_size = 128;
 
-    uint8_t* port0_tx_buffer_ = nullptr;
-    mx_paddr_t port0_tx_buffer_pa_ = 0;
+    // transfer buffers for control rx and tx
+    TransferBufferList control_rx_buffers_;
+    TransferBufferList control_tx_buffers_;
+    uint32_t next_control_tx_buffer_ = 0;
 
     // pending iotxns
     list_node iotxn_list = LIST_INITIAL_VALUE(iotxn_list);
