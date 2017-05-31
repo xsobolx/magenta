@@ -75,6 +75,10 @@ public:
         return queue_.pop_back();
     }
 
+    bool IsEmpty() {
+        return queue_.is_empty();
+    }
+
 private:
     DISALLOW_COPY_ASSIGN_AND_MOVE(TransferBufferQueue);
 

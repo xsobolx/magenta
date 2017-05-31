@@ -105,14 +105,16 @@ mx_status_t ConsoleDevice::virtio_console_write(void* ctx, const void* buf, size
 mx_status_t ConsoleDevice::Read(Port *p, void* buf, size_t count, mx_off_t off, size_t* actual) {
     LTRACEF("port %p count %zu off %lu\n", p, count, off);
 
-    mxtl::AutoLock a(&request_lock_);
-
     *actual = 0;
 
+    mxtl::AutoLock a(&request_lock_);
+
+    // see if we have any queued up data
     TransferBuffer *tb = p->rx_queue.PeekHead();
-    LTRACEF("tb %p\n", tb);
-    if (!tb)
-        return NO_ERROR;
+    if (!tb) {
+        device_state_clr(p->device, DEV_STATE_READABLE);
+        return ERR_SHOULD_WAIT;
+    }
 
     size_t len = mxtl::min(count, tb->used_len - tb->processed_len);
     memcpy(buf, tb->ptr + tb->processed_len, len);
@@ -135,19 +137,25 @@ mx_status_t ConsoleDevice::Read(Port *p, void* buf, size_t count, mx_off_t off, 
 mx_status_t ConsoleDevice::Write(Port *p, const void* buf, size_t count, mx_off_t off, size_t* actual) {
     LTRACEF("port %p count %zu off %lu\n", p, count, off);
 
-    mxtl::AutoLock a(&request_lock_);
-
     *actual = 0;
+
+    mxtl::AutoLock a(&request_lock_);
 
     // pop a transfer buffer off the tx queue, fill it with data and queue it
     auto tb = p->tx_queue.Dequeue();
-    assert(tb);
+    if (!tb) {
+        // we're out of buffers, the other side must not be listening
+        device_state_clr(p->device, DEV_STATE_WRITABLE);
+        return ERR_SHOULD_WAIT;
+    }
 
+    // build a packet to transfer the data
     size_t len = mxtl::min(count, tb->total_len);
     memcpy(tb->ptr, buf, len);
     *actual += len;
     tb->used_len = len;
 
+    // queue it
     QueueTxTransfer(p->tx_ring.get(), tb);
 
     return NO_ERROR;
@@ -378,6 +386,9 @@ void ConsoleDevice::IrqRingUpdate() {
 
                 LTRACEF("returning tx transfer %p on port %p\n", tb, &port);
                 port.tx_queue.Add(tb);
+
+                // we have at least one packet ready to be filled in so we're WRITABLE now
+                device_state_set(port.device, DEV_STATE_WRITABLE);
             };
             port.tx_ring->IrqRingUpdate(handle_port_tx_ring);
         }
@@ -417,11 +428,18 @@ void ConsoleDevice::IrqRingUpdate() {
                 // queue the rx descriptor again
                 assert(tb);
 
+
                 // queue the received data
+                bool queue_was_empty = port.rx_queue.IsEmpty();
                 tb->used_len = used_elem->len;
                 tb->processed_len = 0;
                 LTRACEF("queuing transfer %p on port %p\n", tb, &port);
                 port.rx_queue.Add(tb);
+
+                // if we're putting the first thing in the queue, mark the device readable
+                if (queue_was_empty) {
+                    device_state_set(port.device, DEV_STATE_READABLE);
+                }
             };
             port.rx_ring->IrqRingUpdate(handle_port_rx_ring);
         }
