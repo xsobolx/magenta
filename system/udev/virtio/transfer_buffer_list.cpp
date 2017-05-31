@@ -10,6 +10,8 @@
 #include "utils.h"
 #include "trace.h"
 
+#define LOCAL_TRACE 0
+
 namespace virtio {
 
 TransferBufferList::TransferBufferList() {
@@ -30,6 +32,18 @@ mx_status_t TransferBufferList::Init(size_t count, size_t buffer_size) {
         return err;
     }
 
+    // build a per buffer descriptor object
+    auto tb = new TransferBuffer[count_];
+    buffers_.reset(tb, count_);
+
+    for (size_t i = 0; i < count_; i++) {
+        buffers_[i].ptr = buffer_ + i * buffer_size;
+        buffers_[i].pa = buffer_pa_ + i * buffer_size;
+        buffers_[i].total_len = buffer_size;
+        buffers_[i].used_len = 0;
+        buffers_[i].processed_len = 0;
+    }
+
     return NO_ERROR;
 }
 
@@ -37,30 +51,31 @@ TransferBufferList::~TransferBufferList() {
     if (buffer_) {
         mx::vmar::root_self().unmap((uintptr_t)buffer_, size_);
     }
+    delete[] buffers_.get();
+    buffers_.release();
 }
 
-mx_status_t TransferBufferList::GetBuffer(size_t index, void **ptr, mx_paddr_t *pa) {
+TransferBuffer* TransferBufferList::GetBuffer(size_t index) {
     if (index > count_) {
         assert(0);
-        return ERR_INVALID_ARGS;
+        return nullptr;
     }
 
-    if (ptr)
-        *ptr = buffer_ + index * buffer_size_;
-    if (pa)
-        *pa = buffer_pa_ + index * buffer_size_;
-
-    return NO_ERROR;
+    return &buffers_[index];
 }
 
-void* TransferBufferList::PhysicalToVirtual(mx_paddr_t pa) {
-    // based on the physical address, look up the corresponding virtual address
+TransferBuffer* TransferBufferList::PhysicalToTransfer(mx_paddr_t pa) {
     if (pa < buffer_pa_ || pa >= buffer_pa_ + size_) {
         assert(0);
         return nullptr;
     }
 
-    return buffer_ + (pa - buffer_pa_);
+    size_t index = (pa - buffer_pa_) / buffer_size_;
+    assert(index < count_);
+
+    LTRACEF("pa %#lx buffer_pa %#lx index %zu\n", pa, buffer_pa_, index);
+
+    return &buffers_[index];
 }
 
 } // namespace virtio

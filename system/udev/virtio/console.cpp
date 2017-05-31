@@ -44,38 +44,6 @@ struct virtio_console_control {
 
 namespace virtio {
 
-// DDK level ops
-mx_status_t ConsoleDevice::virtio_console_read(void* ctx, void* buf, size_t count, mx_off_t off, size_t* actual) {
-    LTRACEF("count %zu off %lu\n", count, off);
-
-    return ERR_NOT_SUPPORTED;
-}
-
-mx_status_t ConsoleDevice::virtio_console_write(void* ctx, const void* buf, size_t count, mx_off_t off, size_t* actual) {
-    LTRACEF("count %zu off %lu\n", count, off);
-
-    return ERR_NOT_SUPPORTED;
-}
-
-ConsoleDevice::ConsoleDevice(mx_driver_t* driver, mx_device_t* bus_device)
-    : Device(driver, bus_device) {
-    // so that Bind() knows how much io space to allocate
-    bar0_size_ = 0x40;
-}
-
-ConsoleDevice::~ConsoleDevice() {
-    // TODO: clean up allocated physical memory
-}
-
-int ConsoleDevice::virtio_console_start_entry(void* arg) {
-
-    ConsoleDevice* c = static_cast<ConsoleDevice*>(arg);
-
-    c->virtio_console_start();
-
-    return 0;
-}
-
 static mx_status_t QueueTransfer(Ring *ring, mx_paddr_t pa, uint32_t len, bool write) {
     uint16_t i;
     auto desc = ring->AllocDescChain(1, &i);
@@ -99,26 +67,127 @@ static mx_status_t QueueTransfer(Ring *ring, mx_paddr_t pa, uint32_t len, bool w
     return NO_ERROR;
 }
 
+static mx_status_t QueueRxTransfer(Ring *ring, TransferBuffer *tb) {
+    tb->used_len = 0;
+    tb->processed_len = 0;
+
+    assert(tb->total_len <= UINT32_MAX);
+
+    return QueueTransfer(ring, tb->pa, (uint32_t)tb->total_len, false);
+}
+
+static mx_status_t QueueTxTransfer(Ring *ring, TransferBuffer *tb) {
+    tb->processed_len = 0;
+
+    assert(tb->used_len <= UINT32_MAX);
+    assert(tb->used_len <= tb->total_len);
+
+    return QueueTransfer(ring, tb->pa, (uint32_t)tb->used_len, true);
+}
+
+// DDK level ops
+mx_status_t ConsoleDevice::virtio_console_read(void* ctx, void* buf, size_t count, mx_off_t off, size_t* actual) {
+    LTRACEF("ctx %p count %zu off %lu\n", ctx, count, off);
+    Port *p = (Port*)ctx;
+    ConsoleDevice *c = p->console_device;
+
+    return c->Read(p, buf, count, off, actual);
+}
+
+mx_status_t ConsoleDevice::virtio_console_write(void* ctx, const void* buf, size_t count, mx_off_t off, size_t* actual) {
+    LTRACEF("ctx %p count %zu off %lu\n", ctx, count, off);
+    Port *p = (Port*)ctx;
+    ConsoleDevice *c = p->console_device;
+
+    return c->Write(p, buf, count, off, actual);
+}
+
+mx_status_t ConsoleDevice::Read(Port *p, void* buf, size_t count, mx_off_t off, size_t* actual) {
+    LTRACEF("port %p count %zu off %lu\n", p, count, off);
+
+    mxtl::AutoLock a(&request_lock_);
+
+    *actual = 0;
+
+    TransferBuffer *tb = p->rx_queue.PeekHead();
+    LTRACEF("tb %p\n", tb);
+    if (!tb)
+        return NO_ERROR;
+
+    size_t len = mxtl::min(count, tb->used_len - tb->processed_len);
+    memcpy(buf, tb->ptr + tb->processed_len, len);
+    tb->processed_len += len;
+    *actual += len;
+
+    // if this completes the transfer, requeue it
+    if (tb->processed_len == tb->used_len) {
+        auto tb2 = p->rx_queue.Dequeue();
+        assert(tb == tb2);
+
+        QueueRxTransfer(p->rx_ring.get(), tb);
+    }
+
+    LTRACEF("retuning with actual count %zu\n", *actual);
+
+    return NO_ERROR;
+}
+
+mx_status_t ConsoleDevice::Write(Port *p, const void* buf, size_t count, mx_off_t off, size_t* actual) {
+    LTRACEF("port %p count %zu off %lu\n", p, count, off);
+
+    mxtl::AutoLock a(&request_lock_);
+
+    *actual = 0;
+
+    // pop a transfer buffer off the tx queue, fill it with data and queue it
+    auto tb = p->tx_queue.Dequeue();
+    assert(tb);
+
+    size_t len = mxtl::min(count, tb->total_len);
+    memcpy(tb->ptr, buf, len);
+    *actual += len;
+    tb->used_len = len;
+
+    QueueTxTransfer(p->tx_ring.get(), tb);
+
+    return NO_ERROR;
+}
+
+// console device
+ConsoleDevice::ConsoleDevice(mx_driver_t* driver, mx_device_t* bus_device)
+    : Device(driver, bus_device) {
+    // so that Bind() knows how much io space to allocate
+    bar0_size_ = 0x40;
+}
+
+ConsoleDevice::~ConsoleDevice() {
+}
+
+int ConsoleDevice::virtio_console_start_entry(void* arg) {
+
+    ConsoleDevice* c = static_cast<ConsoleDevice*>(arg);
+
+    c->virtio_console_start();
+
+    return 0;
+}
+
 mx_status_t ConsoleDevice::virtio_console_start() {
-
-    mx_paddr_t pa;
-
     mxtl::AutoLock a(&request_lock_);
 
     // queue up all transfers on the control port
     for (size_t i = 0; i < control_ring_size; i++) {
-        control_rx_buffers_.GetBuffer(i, nullptr, &pa);
-        QueueTransfer(&control_rx_vring_, pa, port_buffer_size, false);
+        TransferBuffer *tb = control_rx_buffers_.GetBuffer(i);
+        QueueTransfer(&control_rx_vring_, tb->pa, port_buffer_size, false);
     }
 
     // tell the device we're ready to talk
     virtio_console_control control = {};
     control.event = VIRTIO_CONSOLE_DEVICE_READY;
     control.value = 1;
-    void *control_tx_buffer_;
-    control_tx_buffers_.GetBuffer(next_control_tx_buffer_, &control_tx_buffer_, &pa);
-    memcpy(control_tx_buffer_, &control, sizeof(control));
-    QueueTransfer(&control_tx_vring_, pa, sizeof(control), true);
+    TransferBuffer *tb = control_tx_buffers_.GetBuffer(next_control_tx_buffer_);
+    memcpy(tb->ptr, &control, sizeof(control));
+    QueueTransfer(&control_tx_vring_, tb->pa, sizeof(control), true);
 
     return NO_ERROR;
 }
@@ -153,8 +222,8 @@ mx_status_t ConsoleDevice::Init() {
         return err;
     }
 
-    control_rx_buffers_.Init(32, control_buffer_size);
-    control_tx_buffers_.Init(32, control_buffer_size);
+    control_rx_buffers_.Init(control_ring_size, control_buffer_size);
+    control_tx_buffers_.Init(control_ring_size, control_buffer_size);
 
     // start the interrupt thread
     StartIrqThread();
@@ -218,8 +287,8 @@ static mx_paddr_t complete_transfer(Ring *ring, vring_used_elem *elem) {
     return pa;
 }
 
-void ConsoleDevice::HandleControlMessage(size_t len, mx_paddr_t pa) {
-    virtio_console_control *rx_message = (virtio_console_control *)control_rx_buffers_.PhysicalToVirtual(pa);
+void ConsoleDevice::HandleControlMessage(TransferBuffer *tb) {
+    virtio_console_control *rx_message = (virtio_console_control *)tb->ptr;
     assert(rx_message);
 
     bool send_response = false;
@@ -237,20 +306,17 @@ void ConsoleDevice::HandleControlMessage(size_t len, mx_paddr_t pa) {
                 break;
             }
 
-            port_[rx_message->id].Init(this);
+            uint16_t ring_index = (rx_message->id == 0) ? 0 : (uint16_t)((rx_message->id + 1u) * 2u);
+            LTRACEF("port %u ring index is %hu\n", rx_message->id, ring_index);
+            port_[rx_message->id].Init(this, ring_index);
 
             char name[128];
             snprintf(name, sizeof(name), "virtiocon-%u", rx_message->id);
 
-            port_[rx_message->id].device_ops = {};
-            port_[rx_message->id].device_ops.version = DEVICE_OPS_VERSION;
-            port_[rx_message->id].device_ops.read = virtio_console_read;
-            port_[rx_message->id].device_ops.write = virtio_console_write;
-
             device_add_args_t args = {};
             args.version = DEVICE_ADD_ARGS_VERSION;
             args.name = name;
-            args.ctx = this;
+            args.ctx = &port_[rx_message->id]; // pass a pointer to the port, not the overall device
             args.driver = driver_;
             args.ops = &port_[rx_message->id].device_ops;
             args.proto_id = MX_PROTOCOL_CONSOLE;
@@ -262,8 +328,8 @@ void ConsoleDevice::HandleControlMessage(size_t len, mx_paddr_t pa) {
 
             // queue up all the packets on the rx side of the port
             for (size_t i = 0; i < port_ring_size; i++) {
-                port_[rx_message->id].rx_buffer.GetBuffer(i, nullptr, &pa);
-                QueueTransfer(port_[rx_message->id].rx_ring.get(), pa, port_buffer_size, false);
+                TransferBuffer *tb = port_[rx_message->id].rx_buffer.GetBuffer(i);
+                QueueRxTransfer(port_[rx_message->id].rx_ring.get(), tb);
             }
 
             break;
@@ -277,15 +343,13 @@ void ConsoleDevice::HandleControlMessage(size_t len, mx_paddr_t pa) {
             break;
         default:
             TRACEF("unhandled console control message %u\n", rx_message->event);
-            hexdump(rx_message, len);
+            hexdump(rx_message, tb->used_len);
     }
 
     if (send_response) {
-        void* control_tx_buffer;
-        mx_paddr_t pa;
-        control_tx_buffers_.GetBuffer(next_control_tx_buffer_++, &control_tx_buffer, &pa);
-        memcpy(control_tx_buffer, &response, sizeof(response));
-        QueueTransfer(&control_tx_vring_, pa, sizeof(virtio_console_control), true);
+        TransferBuffer *tb = control_tx_buffers_.GetBuffer(next_control_tx_buffer_++);
+        memcpy(tb->ptr, &response, sizeof(response));
+        QueueTransfer(&control_tx_vring_, tb->pa, sizeof(virtio_console_control), true);
     }
 }
 
@@ -306,7 +370,14 @@ void ConsoleDevice::IrqRingUpdate() {
         if (port.active) {
             auto handle_port_tx_ring = [this, &port](vring_used_elem* used_elem) {
                 LTRACEF("port tx used_elem %p\n", used_elem);
-                complete_transfer(port.tx_ring.get(), used_elem);
+                mx_paddr_t pa = complete_transfer(port.tx_ring.get(), used_elem);
+
+                // get the transfer buffer for this and return it to the tx queue
+                TransferBuffer *tb = port.tx_buffer.PhysicalToTransfer(pa);
+                assert(tb);
+
+                LTRACEF("returning tx transfer %p on port %p\n", tb, &port);
+                port.tx_queue.Add(tb);
             };
             port.tx_ring->IrqRingUpdate(handle_port_tx_ring);
         }
@@ -319,7 +390,12 @@ void ConsoleDevice::IrqRingUpdate() {
 
         LTRACEF("control rx len %u\n", used_elem->len);
 
-        HandleControlMessage(used_elem->len, pa);
+        TransferBuffer *tb = control_rx_buffers_.PhysicalToTransfer(pa);
+        assert(tb);
+        tb->used_len = used_elem->len;
+        tb->processed_len = 0;
+
+        HandleControlMessage(tb);
 
         // queue the packet again
         QueueTransfer(&control_rx_vring_, pa, port_buffer_size, false);
@@ -329,18 +405,25 @@ void ConsoleDevice::IrqRingUpdate() {
     // handle port rx ring transfers
     for (auto &port: port_) {
         if (port.active) {
-            auto handle_port0_rx_ring = [this, &port](vring_used_elem* used_elem) {
-                LTRACEF("port0 rx used_elem %p %u\n", used_elem, used_elem->id);
+            auto handle_port_rx_ring = [this, &port](vring_used_elem* used_elem) {
+                LTRACEF("port rx used_elem %p %u\n", used_elem, used_elem->id);
                 mx_paddr_t pa = complete_transfer(port.rx_ring.get(), used_elem);
 
-                LTRACEF("port0 rx len %u\n", used_elem->len);
+                LTRACEF("port rx pa %#lx len %u\n", pa, used_elem->len);
 
-                // TODO: process incoming port data here
+                // take the incoming port data and stuff in the rx transfer queue
+                TransferBuffer *tb = port.rx_buffer.PhysicalToTransfer(pa);
 
                 // queue the rx descriptor again
-                QueueTransfer(port.rx_ring.get(), pa, port_buffer_size, false);
+                assert(tb);
+
+                // queue the received data
+                tb->used_len = used_elem->len;
+                tb->processed_len = 0;
+                LTRACEF("queuing transfer %p on port %p\n", tb, &port);
+                port.rx_queue.Add(tb);
             };
-            port.rx_ring->IrqRingUpdate(handle_port0_rx_ring);
+            port.rx_ring->IrqRingUpdate(handle_port_rx_ring);
         }
     }
 
@@ -351,19 +434,22 @@ void ConsoleDevice::IrqConfigChange() {
     LTRACE_ENTRY;
 }
 
-mx_status_t ConsoleDevice::Port::Init(Device *dev) {
+ConsoleDevice::Port::Port() {}
+ConsoleDevice::Port::~Port() {}
+
+mx_status_t ConsoleDevice::Port::Init(ConsoleDevice *dev, uint16_t ring_index) {
     if (active)
         return NO_ERROR;
 
     rx_ring.reset(new Ring(dev));
     tx_ring.reset(new Ring(dev));
 
-    mx_status_t err = rx_ring->Init(0, port_ring_size);
+    mx_status_t err = rx_ring->Init(ring_index, port_ring_size);
     if (err < 0) {
         VIRTIO_ERROR("failed to allocate port rx ring\n");
         return err;
     }
-    err = tx_ring->Init(1, port_ring_size);
+    err = tx_ring->Init((uint16_t)(ring_index + 1), port_ring_size);
     if (err < 0) {
         VIRTIO_ERROR("failed to allocate port tx ring\n");
         return err;
@@ -371,6 +457,19 @@ mx_status_t ConsoleDevice::Port::Init(Device *dev) {
 
     rx_buffer.Init(port_ring_size, port_buffer_size);
     tx_buffer.Init(port_ring_size, port_buffer_size);
+
+    // rx queue starts off empty
+
+    // tx queue starts off with all the transfer buffers queued in it
+    for (size_t i = 0; i < port_ring_size; i++) {
+        tx_queue.Add(tx_buffer.GetBuffer(i));
+    }
+
+    device_ops = {};
+    device_ops.version = DEVICE_OPS_VERSION;
+    device_ops.read = virtio_console_read;
+    device_ops.write = virtio_console_write;
+    console_device = dev;
 
     active = true;
 

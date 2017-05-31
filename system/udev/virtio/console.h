@@ -30,7 +30,11 @@ private:
     static mx_status_t virtio_console_read(void* ctx, void* buf, size_t count, mx_off_t off, size_t* actual);
     static mx_status_t virtio_console_write(void* ctx, const void* buf, size_t count, mx_off_t off, size_t* actual);
 
-    void HandleControlMessage(size_t, mx_paddr_t);
+    struct Port;
+    mx_status_t Read(Port *p, void* buf, size_t count, mx_off_t off, size_t* actual);
+    mx_status_t Write(Port *p, const void* buf, size_t count, mx_off_t off, size_t* actual);
+
+    void HandleControlMessage(TransferBuffer *tb);
 
     mx_status_t virtio_console_start();
     static int virtio_console_start_entry(void* arg);
@@ -44,24 +48,32 @@ private:
     Ring control_rx_vring_ = {this};
     Ring control_tx_vring_ = {this};
 
-    // per port configurations
+    // per port tracking data
     struct Port {
-        Port() {}
+        Port();
+        ~Port();
+        DISALLOW_COPY_ASSIGN_AND_MOVE(Port);
 
-        mx_status_t Init(Device *dev);
+        mx_status_t Init(ConsoleDevice *dev, uint16_t ring_index);
 
+        // members
         mxtl::unique_ptr<Ring> rx_ring;
         mxtl::unique_ptr<Ring> tx_ring;
 
         TransferBufferList rx_buffer;
         TransferBufferList tx_buffer;
 
+        TransferBufferQueue rx_queue;
+        TransferBufferQueue tx_queue;
+
         mx_device_t *device = nullptr;
         mx_protocol_device_t device_ops = {};
 
         bool active = false;
+        ConsoleDevice *console_device = nullptr;
     };
 
+    // there can be up to 32 ports per device
     Port port_[32];
 
     // saved block device configuration out of the pci config BAR
