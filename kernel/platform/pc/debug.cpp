@@ -27,33 +27,27 @@
 
 static const int uart_baud_rate = 115200;
 static const int uart_io_port = 0x3f8;
-#ifdef DEBUG_UART_MEM_ADDR
 static uint64_t uart_mem_addr = 0;
-#endif
 
 cbuf_t console_input_buf;
 static bool output_enabled = false;
 
 static uint8_t uart_read(uint8_t reg)
 {
-#ifdef DEBUG_UART_MEM_ADDR
-    if (uart_mem_addr)
+    if (uart_mem_addr) {
         return (uint8_t)readl(uart_mem_addr + 4 * reg);
-    else
-        return 0;
-#else
-    return (uint8_t)inp((uint16_t)(uart_io_port + reg));
-#endif
+    } else {
+        return (uint8_t)inp((uint16_t)(uart_io_port + reg));
+    }
 }
 
 static void uart_write(uint8_t reg, uint8_t val)
 {
-#ifdef DEBUG_UART_MEM_ADDR
-    if (uart_mem_addr)
+    if (uart_mem_addr) {
         writel(val, uart_mem_addr + 4 * reg);
-#else
-    outp((uint16_t)(uart_io_port + reg), val);
-#endif
+    } else {
+        outp((uint16_t)(uart_io_port + reg), val);
+    }
 }
 
 static enum handler_return platform_drain_debug_uart_rx(void)
@@ -102,10 +96,6 @@ void platform_init_debug_early(void)
     /* configure the uart */
     int divisor = 115200 / uart_baud_rate;
 
-#ifdef DEBUG_UART_MEM_ADDR
-    uart_mem_addr = (uint64_t)paddr_to_kvaddr(DEBUG_UART_MEM_ADDR);
-#endif
-
     /* get basic config done so that tx functions */
     uart_write(1, 0); // mask all irqs
     uart_write(3, 0x80); // set up to load divisor latch
@@ -119,6 +109,18 @@ void platform_init_debug_early(void)
 
 void platform_init_debug(void)
 {
+    // command line isn't available in platform_init_debug_early()
+    // so we read it here instead
+    uint64_t uart_paddr = cmdline_get_uint64("pc.uart.paddr", 0);
+    if (uart_paddr) {
+//        struct list_node list = LIST_INITIAL_VALUE(list);
+//        pmm_alloc_range(uart_paddr & (PAGE_SIZE - 1), 1, &list);
+
+        uart_mem_addr = (uint64_t)paddr_to_kvaddr(uart_paddr);
+        // need to reinitialize in this case
+        platform_init_debug_early();
+    }
+
     /* finish uart init to get rx going */
     cbuf_initialize(&console_input_buf, 1024);
 
