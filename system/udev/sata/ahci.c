@@ -716,7 +716,7 @@ static mx_status_t ahci_bind(void* ctx, mx_device_t* dev, void** cookie) {
 
     // map register window
     status = pci->map_resource(dev, PCI_RESOURCE_BAR_5, MX_CACHE_POLICY_UNCACHED_DEVICE,
-                               (void*)&device->regs, &device->regs_size, &device->regs_handle);
+                               (void**)&device->regs, &device->regs_size, &device->regs_handle);
     if (status != NO_ERROR) {
         xprintf("ahci: error %d mapping register window\n", status);
         goto fail;
