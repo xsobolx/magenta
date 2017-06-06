@@ -18,6 +18,7 @@ MODULE_DEPS := \
 	kernel/dev/iommu \
 	kernel/lib/bitmap \
 	kernel/lib/hwreg \
+	kernel/lib/magenta \
 	kernel/lib/mxtl \
 
 include make/module.mk

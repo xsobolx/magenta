@@ -22,6 +22,11 @@ public:
 
     ~DummyIommu() final;
 
+    static void RegisterDriver(unsigned int);
 private:
     explicit DummyIommu(uint64_t id);
+
+    static status_t CreateFromResource(mxtl::RefPtr<ResourceDispatcher> rsrc,
+                                       mxtl::RefPtr<Iommu>* out);
+    static IommuDriver drv_;
 };

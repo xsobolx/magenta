@@ -11,4 +11,8 @@ MODULE := $(LOCAL_DIR)
 MODULE_SRCS := \
     $(LOCAL_DIR)/base.cpp
 
+MODULE_DEPS := \
+	kernel/lib/magenta \
+	kernel/lib/mxtl \
+
 include make/module.mk

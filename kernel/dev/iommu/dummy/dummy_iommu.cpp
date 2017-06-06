@@ -7,13 +7,16 @@
 #include <dev/iommu/dummy.h>
 
 #include <err.h>
+#include <lk/init.h>
 #include <kernel/vm.h>
+#include <magenta/resource_dispatcher.h>
 #include <mxalloc/new.h>
 #include <mxtl/ref_ptr.h>
 
 DummyIommu::DummyIommu(uint64_t id) : Iommu(id) {
 }
 
+// TODO: Make this return status_t
 mxtl::RefPtr<Iommu> DummyIommu::Create(uint64_t id) {
     AllocChecker ac;
     auto instance = mxtl::AdoptRef<DummyIommu>(new (&ac) DummyIommu(id));
@@ -56,3 +59,25 @@ status_t DummyIommu::Unmap(uint64_t bus_txn_id, dev_vaddr_t vaddr, size_t size) 
 status_t DummyIommu::ClearMappingsForBusTxnId(uint64_t bus_txn_id) {
     return NO_ERROR;
 }
+
+status_t DummyIommu::CreateFromResource(mxtl::RefPtr<ResourceDispatcher> rsrc,
+                                        mxtl::RefPtr<Iommu>* out) {
+    // Dummy IOMMU resources have 0 records
+    mx_rrec_t rec;
+    if (rsrc->GetNthRecord(0, &rec) != ERR_NOT_FOUND) {
+        return ERR_NOT_SUPPORTED;
+    }
+
+    mxtl::RefPtr<Iommu> iommu = DummyIommu::Create(rsrc->get_koid());
+    if (!iommu) {
+        return ERR_NO_MEMORY;
+    }
+    *out = mxtl::move(iommu);
+    return NO_ERROR;
+}
+
+IommuDriver DummyIommu::drv_(&DummyIommu::CreateFromResource);
+void DummyIommu::RegisterDriver(unsigned int) {
+    Iommu::RegisterIommuDriver(&drv_);
+}
+LK_INIT_HOOK(dummy_iommu_register, DummyIommu::RegisterDriver, LK_INIT_LEVEL_KERNEL);

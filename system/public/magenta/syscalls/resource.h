@@ -26,6 +26,7 @@ __BEGIN_CDECLS
 // resource subtypes for SELF
 #define MX_RREC_SELF_GENERIC  (0u) // no special purpose
 #define MX_RREC_SELF_ROOT     (1u) // root of kernel resource tree
+#define MX_RREC_SELF_IOMMU    (2u) // an iommu device
 
 // The 0th record of every resource is of type MX_RREC_SELF and describes
 // the resource itself.  Resources that are not simply access tokens

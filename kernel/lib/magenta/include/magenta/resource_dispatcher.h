@@ -72,6 +72,7 @@ public:
                            size_t* actual, size_t* available);
     mx_status_t GetChildren(user_ptr<mx_rrec_t> records, size_t max,
                             size_t* actual, size_t* available);
+    mx_status_t GetNthRecord(uint32_t index, mx_rrec_t* rec);
 
     mx_status_t Connect(HandleOwner* channel);
     mx_status_t Accept(HandleOwner* channel);

@@ -32,6 +32,7 @@
 #include <magenta/io_mapping_dispatcher.h>
 #include <magenta/magenta.h>
 #include <magenta/process_dispatcher.h>
+#include <magenta/resource_dispatcher.h>
 #include <magenta/syscalls/pci.h>
 #include <magenta/user_copy.h>
 #include <magenta/vm_object_dispatcher.h>
@@ -398,14 +399,16 @@ mx_status_t sys_acpi_cache_flush(mx_handle_t hrsrc) {
 }
 
 mx_status_t sys_bti_create(mx_handle_t iommu_resource, uint64_t bti_id, user_ptr<mx_handle_t> out) {
-    // TODO(teisenbe): Check if this is an IOMMU resource...
+    auto up = ProcessDispatcher::GetCurrent();
+
     mx_status_t status;
-    if ((status = validate_resource_handle(iommu_resource)) < 0) {
+    mxtl::RefPtr<ResourceDispatcher> resource;
+    status = up->GetDispatcherWithRights(iommu_resource, MX_RIGHT_EXECUTE, &resource);
+    if (status != NO_ERROR) {
         return status;
     }
 
-    // TODO(teisenbe): Don't hardcode the IOMMU id as 0
-    mxtl::RefPtr<Iommu> iommu(Iommu::Get(0));
+    mxtl::RefPtr<Iommu> iommu(Iommu::Get(resource->get_koid()));
     if (!iommu) {
         return ERR_INVALID_ARGS;
     }
@@ -419,7 +422,6 @@ mx_status_t sys_bti_create(mx_handle_t iommu_resource, uint64_t bti_id, user_ptr
     }
     HandleOwner handle(MakeHandle(mxtl::move(dispatcher), rights));
 
-    auto up = ProcessDispatcher::GetCurrent();
     mx_handle_t hv = up->MapHandleToValue(handle);
     if ((status = out.copy_to_user(hv)) != NO_ERROR) {
         return status;

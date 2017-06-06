@@ -7,6 +7,7 @@
 #include <err.h>
 #include <inttypes.h>
 
+#include <dev/iommu.h>
 #include <magenta/channel_dispatcher.h>
 #include <magenta/handle_owner.h>
 #include <magenta/magenta.h>
@@ -40,8 +41,10 @@ mx_status_t sys_resource_create(mx_handle_t handle,
     if (_records.copy_array_from_user(&rec, 1, 0) != NO_ERROR)
         return ERR_INVALID_ARGS;
 
-    if ((rec.self.type != MX_RREC_SELF) ||
-        (rec.self.subtype != MX_RREC_SELF_GENERIC))
+    if (rec.self.type != MX_RREC_SELF)
+        return ERR_INVALID_ARGS;
+
+    if (rec.self.subtype != MX_RREC_SELF_GENERIC && rec.self.subtype != MX_RREC_SELF_IOMMU)
         return ERR_INVALID_ARGS;
 
     // Ensure name is terminated
@@ -58,6 +61,17 @@ mx_status_t sys_resource_create(mx_handle_t handle,
     result = child->AddRecords(_records, count);
     if (result != NO_ERROR)
         return result;
+
+    // Now that the resource is constructed, let the IOMMU drivers decide if we
+    // should successfully add this resource.
+    if (rec.self.subtype == MX_RREC_SELF_IOMMU) {
+        // TODO: Clean up IOMMU if something fails after we create it
+        mxtl::RefPtr<Iommu> iommu;
+        result = Iommu::CreateFromResource(child, &iommu);
+        if (result != NO_ERROR) {
+            return result;
+        }
+    }
 
     // Add child to the parent
     result = parent->AddChild(child);

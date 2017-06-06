@@ -348,6 +348,21 @@ ResourceRecord* ResourceDispatcher::GetNthRecordLocked(uint32_t index) {
     return nullptr;
 }
 
+mx_status_t ResourceDispatcher::GetNthRecord(uint32_t index, mx_rrec_t* rec) {
+    AutoLock lock(&lock_);
+
+    if (state_ != State::Alive) {
+        return ERR_BAD_STATE;
+    }
+
+    ResourceRecord* record = GetNthRecordLocked(index);
+    if (!record) {
+        return ERR_NOT_FOUND;
+    }
+    *rec = record->content_;
+    return NO_ERROR;
+}
+
 mx_status_t ResourceDispatcher::GetRecords(user_ptr<mx_rrec_t> records, size_t max,
                                            size_t* actual, size_t* available) {
     canary_.Assert();

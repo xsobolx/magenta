@@ -7,10 +7,12 @@
 #include <dev/iommu.h>
 
 #include <kernel/auto_lock.h>
+#include <magenta/resource_dispatcher.h>
 #include <mxtl/intrusive_double_list.h>
 
 Mutex Iommu::kIommuListLock_;
 mxtl::DoublyLinkedList<mxtl::RefPtr<Iommu>> Iommu::kIommuList_;
+mxtl::DoublyLinkedList<IommuDriver*> Iommu::kDriverList_;
 
 Iommu::Iommu(uint64_t iommu_id) : id_(iommu_id) {
 }
@@ -39,4 +41,19 @@ void Iommu::RegisterIommu(mxtl::RefPtr<Iommu> iommu) {
     }
 
     kIommuList_.push_back(mxtl::move(iommu));
+}
+
+status_t Iommu::CreateFromResource(mxtl::RefPtr<ResourceDispatcher> rsrc,
+                                   mxtl::RefPtr<Iommu>* out) {
+    for (auto& drv : kDriverList_) {
+        status_t status = drv.create_from_resource(rsrc, out);
+        if (status != ERR_NOT_SUPPORTED) {
+            return status;
+        }
+    }
+    return ERR_NOT_SUPPORTED;
+}
+
+void Iommu::RegisterIommuDriver(IommuDriver* drv) {
+    kDriverList_.push_back(drv);
 }

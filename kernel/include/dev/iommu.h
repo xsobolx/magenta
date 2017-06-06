@@ -23,6 +23,9 @@
 // Type used to refer to virtual addresses presented to a device by the IOMMU.
 typedef uint64_t dev_vaddr_t;
 
+struct IommuDriver;
+class ResourceDispatcher;
+
 class Iommu : public mxtl::RefCounted<Iommu>,
               public mxtl::DoublyLinkedListable<mxtl::RefPtr<Iommu>> {
 public:
@@ -30,6 +33,10 @@ public:
     //
     // Returns nullptr if the requested one could not be found.
     static mxtl::RefPtr<Iommu> Get(uint64_t iommu_id);
+
+    // Create a new Iommu based on the given resource.
+    static status_t CreateFromResource(mxtl::RefPtr<ResourceDispatcher> rsrc,
+                                       mxtl::RefPtr<Iommu>* out);
 
     // Check if |bus_txn_id| is valid for this IOMMU (i.e. could be used
     // to configure a device).
@@ -66,17 +73,33 @@ public:
     uint64_t id() const { return id_; }
 
     virtual ~Iommu();
+
+    // Register an IOMMU driver so that it can received CreateFromResource()
+    // calls.
+    static void RegisterIommuDriver(IommuDriver* drv);
 protected:
     explicit Iommu(uint64_t id);
 
-    // Register a newly create IOMMU so that it can be retrieved with Get()
+    // Register a newly created IOMMU so that it can be retrieved with Get()
     static void RegisterIommu(mxtl::RefPtr<Iommu> iommu);
 
     // A unique identifier assigned by the implementation.
     const uint64_t id_;
 private:
-
     // Bookkeeping used for Get()
     static Mutex kIommuListLock_;
     static mxtl::DoublyLinkedList<mxtl::RefPtr<Iommu>> kIommuList_ TA_GUARDED(kIommuListLock_);
+    static mxtl::DoublyLinkedList<IommuDriver*> kDriverList_;
+};
+
+// Descriptor used to register IOMMU drivers for binding agianst resources
+struct IommuDriver : public mxtl::DoublyLinkedListable<IommuDriver*> {
+    typedef status_t (*create_from_resource_func)(mxtl::RefPtr<ResourceDispatcher> rsrc,
+                                     mxtl::RefPtr<Iommu>* out);
+
+    explicit IommuDriver(create_from_resource_func func) {
+        create_from_resource = func;
+    }
+
+    create_from_resource_func create_from_resource;
 };
